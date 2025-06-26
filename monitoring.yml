@@ -1,0 +1,59 @@
+parameters:
+  - name: app
+    displayName: Application 
+    type: string
+    default: ALL
+    values:
+      - ALL
+      - JCT
+      - JMP
+      - JCR
+      - ENABLE
+  - name: time
+    displayName: Time
+    type: string
+    default: 2h
+    values:
+      - 5m
+      - 15m
+      - 30m
+      - 1h
+      - 2h
+      - 1d
+  - name: myBoolean
+    displayName: Disable
+    type: boolean
+    default: true
+
+trigger: none
+#- master
+
+pool:
+  name: DEVOPSAGENT-L-LHGCrew-N01
+
+strategy:
+  matrix:
+    Python311_NONPROD:
+      python.version: '3.11'
+
+variables:
+- group: 4YNGINX
+
+steps:
+- task: UsePythonVersion@0
+  inputs:
+    versionSpec: '$(python.version)'
+  displayName: 'Use Python $(python.version)'
+
+- script: |
+    python -m pip install --upgrade pip
+    python -m venv ./venv
+    source ./venv/bin/activate
+    #pip install -r ./monitoring/requirements.txt
+    python -m pip install -r ./monitoring/requirements.txt -U --upgrade-strategy eager
+  displayName: 'Install dependencies'
+
+- script: |
+    source ./venv/bin/activate
+    python3 ./monitoring/monitoring.py $(nginxpwd) ${{parameters.app}} ${{parameters.time}}
+  displayName: 'Monitoring for AlertManager'

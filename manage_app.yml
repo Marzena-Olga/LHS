@@ -1,0 +1,230 @@
+parameters:
+  - name: app
+    displayName: Application 
+    type: string
+    default: STATUS
+    values:
+      - START
+      - CONFIGURE
+      - STOP
+      - STATUS
+  - name: time
+    displayName: Time
+    type: string
+    default: 2h
+    values:
+      - 5m
+      - 15m
+      - 30m
+      - 1h
+      - 2h
+      - 3h
+      - 1d
+
+trigger: none
+#- master
+
+pool:
+  name: DEVOPSAGENT-L-PRDINST-P02
+
+variables:
+- group: 4YNGINX
+
+stages:
+  - stage: Silences
+    dependsOn: []    
+    jobs:
+    - job: Set_silence
+      pool:
+        name: DEVOPSAGENT-L-PRDINST-P02
+      steps:
+      - script: |
+          #echo ${{parameters.app}}
+          time=${{parameters.time}}
+          admpasswd=$(nginxpwd_prod)
+          #echo ${admpasswd}
+          mon_node="ssh -p 2022 l-prdmon-p02.discover.lhgroup.de"
+
+          if [[ ${{parameters.app}} == 'STOP' ]]; then
+            echo ${{parameters.time}}
+            
+            python3 ./alertmanager/alertmanager.py --url='https://l-prdmon-p02.discover.lhgroup.de:8443/alertmanager/api/v2/silences' --login='admin' --password=$(nginxpwd_prod) --time=${{parameters.time}}
+          
+            
+            res1=$(curl -k -u admin:$admpasswd https://l-prdmon-p02.discover.lhgroup.de:8443/alertmanager/api/v2/silences | jq '.[0]."status"."state"')
+            res2=$(curl -k -u admin:$admpasswd https://l-prdmon-p02.discover.lhgroup.de:8443/alertmanager/api/v2/silences | jq '.[0]."createdBy"')
+            echo $res1 $res2
+            if [[ $res1 == '"active"' ]] && [[ $res2 == '"pipeline"' ]]; then
+              echo "Silence OK"
+            else
+              echo "Silence failed"
+              exit 1
+            fi
+          else
+            echo "No set silence"
+          fi  
+          #echo "Check silences on host: https://l-pdtmon-t02.discover-test.lhgroup.de:8443/alertmanager/#/silences "
+        displayName: 'Disable monitoring'
+
+
+  - stage: JCT
+    dependsOn: [Silences]
+    jobs:
+    - job: Manage_JCT
+      pool:
+        name: DEVOPSAGENT-L-PRDINST-P02
+      steps:
+      - script: |
+          echo ${{parameters.app}}
+          ##################################################################################################
+          if [[ ${{parameters.app}} == 'STATUS' ]]; then
+            echo "STATUS"
+            cd /home/atriumadmin/4ycms-prd/jct/ && atriumorc -d
+          fi  
+          ##################################################################################################
+          if [[ ${{parameters.app}} == 'STOP' ]]; then
+            echo "STOP"
+            cd /home/atriumadmin/4ycms-prd/jct/ && atriumorc -c stop
+            if [ $? -ne 0 ]; then
+              break
+            fi
+          fi  
+          ##################################################################################################
+          if [[ ${{parameters.app}} == 'CONFIGURE' ]]; then
+            echo "CONGIGURE"
+
+            cd /home/atriumadmin/4ycms-prd/jct/ && git checkout master && git fetch && git pull
+            cd /home/atriumadmin/4ycms-prd/jct/ && atriumorc -c configure
+            if [ $? -ne 0 ]; then
+              break
+            fi
+            cd /home/atriumadmin/ansible/ && git checkout master && git fetch && git pull 
+            cd /home/atriumadmin/ansible/ && ansible-playbook -i hosts-prd playbooks/jct-fix.yml
+            if [ $? -ne 0 ]; then
+              break
+            fi
+          fi
+          ##################################################################################################
+          if [[ ${{parameters.app}} == 'START' ]]; then
+            echo "START"
+            echo "*******************JCT***************************"
+            cd /home/atriumadmin/4ycms-prd/jct/ && git checkout master && git fetch && git pull
+            cd /home/atriumadmin/4ycms-prd/jct/ && atriumorc -c start
+            if [ $? -ne 0 ]; then
+              break
+            fi
+          fi  
+        displayName: 'Manage JCT'
+
+  - stage: JCB
+    dependsOn: [JCT]
+    jobs:
+    - job: Manage_JCB
+      pool:
+        name: DEVOPSAGENT-L-PRDINST-P02
+      steps:
+      - script: |
+          services=("crew-personal-information.service" 
+              "crew-bidpoint.service" 
+              "crew-modules-gateway.service" 
+              "crew-report.service"
+              "jcms-integration.service"
+              "crew-leave.service"
+              "jcms_share.mount")
+          #Reverse list services for start
+          for i in "${services[@]}"
+          do
+            rev_services=("$i" "${rev_services[@]}")
+          done
+
+          echo ${{parameters.app}}
+          ##################################################################################################
+          if [[ ${{parameters.app}} == 'STATUS' ]]; then
+            echo "STATUS"
+            for service in ${services[@]}; do
+              echo $service
+              ssh -p 2022 atriumadmin@l-prdjcrwe-p02 "sudo systemctl status $service | grep Active:"
+              echo "------------------------------------------------------"
+            done
+
+            echo "**************************************************************************************"
+            ssh -p 2022 atriumadmin@l-prdjcrwe-p02 'systemctl list-units |grep -e jcms -e crew'
+          fi  
+          ##################################################################################################
+          if [[ ${{parameters.app}} == 'STOP' ]]; then
+            echo "STOP"
+            ssh -p 2022 atriumadmin@l-prdjcrwe-p02 'systemctl list-units |grep -e jcms -e crew'
+            for service in ${services[@]}; do
+              echo $service
+              ssh -p 2022 atriumadmin@l-prdjcrwe-p02 "sudo systemctl stop $service"
+              if [ $? -ne 0 ]; then
+                break
+              fi
+              echo "------------------------------------------------------"
+              #ssh -p 2022 atriumadmin@l-prdjcrwe-p02 'systemctl list-units |grep -e jcms -e crew'
+            done
+            echo "**************************************************************************************"
+            ssh -p 2022 atriumadmin@l-prdjcrwe-p02 'systemctl list-units |grep -e jcms -e crew'
+          fi  
+          ##################################################################################################
+          if [[ ${{parameters.app}} == 'CONFIGURE' ]]; then
+            echo "CONGIGURE"
+            ssh -p 2022 atriumadmin@l-prdjcrwe-p02 'systemctl list-units |grep -e jcms -e crew'           
+          fi
+          ##################################################################################################
+          if [[ ${{parameters.app}} == 'START' ]]; then
+            echo "START"
+            ssh -p 2022 atriumadmin@l-prdjcrwe-p02 'systemctl list-units |grep -e jcms -e crew'
+            echo "**************************************************************************************"
+            for service in ${rev_services[@]}; do
+              echo $service
+              ssh -p 2022 atriumadmin@l-prdjcrwe-p02 "sudo systemctl start $service"
+              if [ $? -ne 0 ]; then
+                break
+              fi
+              echo "------------------------------------------------------"
+            done
+            echo "**************************************************************************************"
+            ssh -p 2022 atriumadmin@l-prdjcrwe-p02 'systemctl list-units |grep -e jcms -e crew'
+          fi  
+        displayName: 'Manage JCB'
+
+  - stage: JMP
+    dependsOn: [JCB]
+    jobs:
+    - job: Manage_JMP
+      pool:
+        name: DEVOPSAGENT-L-PRDINST-P02
+      steps:
+      - script: |
+          echo ${{parameters.app}}
+          ##################################################################################################
+          if [[ ${{parameters.app}} == 'STATUS' ]]; then
+            echo "STATUS"
+            ssh -p 2022 atriumadmin@l-prdjmpin-p01 'cd /jcms_share/jmp/usr/latest/ && sudo make cluster-status'
+          fi  
+          ##################################################################################################
+          if [[ ${{parameters.app}} == 'STOP' ]]; then
+            echo "STOP"
+            ssh -p 2022 atriumadmin@l-prdjmpin-p01 "cd /jcms_share/jmp/usr/latest/ && sudo make cluster-stop"
+            if [ $? -ne 0 ]; then
+              break
+            fi
+          fi  
+          ##################################################################################################
+          if [[ ${{parameters.app}} == 'CONFIGURE' ]]; then
+            echo "CONGIGURE"
+            ssh -p 2022 atriumadmin@l-prdjmpin-p01 'cd /jcms_share/jmp/usr/latest/ && sudo make cluster-status'
+          fi
+          ##################################################################################################
+          if [[ ${{parameters.app}} == 'START' ]]; then
+            echo "START"
+            sshpass -p $(carmen) ssh -t -p 2022 carmen@l-prdjmpin-p01 "cd /jcms_share/jmp/usr/latest/ && echo 'carmen' | sudo -S make cluster-start"
+            if [ $? -ne 0 ]; then
+              break
+            fi
+          fi  
+        displayName: 'Manage JMP'
+
+
+

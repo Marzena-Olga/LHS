@@ -1,0 +1,63 @@
+parameters:
+  - name: app
+    displayName: Application 
+    type: string
+    default: STATUS
+    values:
+      - SILENCE
+      - STATUS
+  - name: time
+    displayName: Time
+    type: string
+    default: 2h
+    values:
+      - 5m
+      - 15m
+      - 30m
+      - 1h
+      - 2h
+      - 3h
+      - 1d
+
+trigger: none
+#- master
+
+pool:
+  name: DEVOPSAGENT-L-PRDINST-P02
+
+variables:
+- group: 4YNGINX
+
+stages:
+  - stage: Silences
+    dependsOn: []    
+    jobs:
+    - job: Set_silence
+      pool:
+        name: DEVOPSAGENT-L-PRDINST-P02
+      steps:
+      - script: |
+          #echo ${{parameters.app}}
+          time=${{parameters.time}}
+          admpasswd=$(nginxpwd_prod)
+          #echo ${admpasswd}
+          mon_node="ssh -p 2022 l-prdmon-p02.discover.lhgroup.de"
+
+          if [[ ${{parameters.app}} == 'SILENCE' ]]; then
+            echo ${{parameters.time}}
+            
+            python3 ./alertmanager/alertmanager.py --url='https://l-prdmon-p02.discover.lhgroup.de:8443/alertmanager/api/v2/silences' --login='admin' --password=$(nginxpwd_prod) --time=${{parameters.time}}
+          
+          else  
+            res1=$(curl -k -u admin:$admpasswd https://l-prdmon-p02.discover.lhgroup.de:8443/alertmanager/api/v2/silences | jq '.[0]."status"."state"')
+            res2=$(curl -k -u admin:$admpasswd https://l-prdmon-p02.discover.lhgroup.de:8443/alertmanager/api/v2/silences | jq '.[0]."createdBy"')
+            echo $res1 $res2
+            if [[ $res1 == '"active"' ]] && [[ $res2 == '"pipeline"' ]]; then
+              echo "Silence OK"
+            else
+              echo "No active silence"
+            fi
+          fi  
+          #echo "Check silences on host: https://l-pdtmon-t02.discover-test.lhgroup.de:8443/alertmanager/#/silences "
+        displayName: 'Disable monitoring'
+
