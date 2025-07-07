@@ -1,0 +1,12 @@
+[Unit]
+Description=File Sync Service
+After=network.target
+
+[Service]
+Type=idle
+Restart=on-failure
+User=root
+ExecStart=/usr/bin/python3.11 /opt/gdn/scripts/gdn-jcr-folder-sync.py --src_path /jcms_share/jcr/usr/Crew-IT-Studio-main-23.0.0/carmdata/crg_saved/saved_reports --des_path /ocn_reports/Studio_Reports/
+
+[Install]
+WantedBy=multi-user.target
