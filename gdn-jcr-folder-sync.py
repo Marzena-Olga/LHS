@@ -10,6 +10,7 @@ parser = argparse.ArgumentParser(
     )
 parser.add_argument("--src_path", required=True, type=str)
 parser.add_argument("--des_path", required=True, type=str)
+parser.add_argument("--track_erase, type=bool)
 args = parser.parse_args()
 
 class MyHandler(FileSystemEventHandler):
